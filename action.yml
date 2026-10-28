@@ -98,7 +98,8 @@ runs:
         fi
         case "$(uname -s)-$(uname -m)" in
           Linux-x86_64) asset=lokadb-linux-amd64.tar.gz ;;
-          *) echo "::error::the lokadb release binary is built for Linux x86-64; on this runner use the image input"; exit 1 ;;
+          Linux-aarch64) asset=lokadb-linux-arm64.tar.gz ;;
+          *) echo "::error::the lokadb release binary is built for Linux x86-64 and ARM64; on this runner use the image input"; exit 1 ;;
         esac
         if [ "$VERSION" = latest ]; then base=https://github.com/lokadb/lokadb/releases/latest/download
         else base="https://github.com/lokadb/lokadb/releases/download/$VERSION"; fi
