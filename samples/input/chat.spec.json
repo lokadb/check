@@ -1,0 +1,4 @@
+{"tables": [
+  {"name": "conversations", "tenant_column": "account_id"},
+  {"name": "messages", "tenant_column": "account_id"}
+]}

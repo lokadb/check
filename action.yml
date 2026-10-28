@@ -1,0 +1,215 @@
+name: lokadb check
+description: >-
+  Run lokadb check against your application's database and workload on every pull request:
+  fail the job on blockers (or on anything a CI baseline has not accepted) and post the summary.
+author: The LokaDB authors
+branding:
+  icon: check-circle
+  color: blue
+
+inputs:
+  db:
+    description: >-
+      Admin DSN of the SaaS's database (use a secret). It reaches lokadb through an environment
+      variable (-db env:LOKADB_DB), never on the command line.
+    required: true
+  spec:
+    description: The tables spec (spec.json), a path in the repository.
+    required: false
+    default: ""
+  tenant-column:
+    description: Without a spec, the organization column the tables are discovered by.
+    required: false
+    default: ""
+  workload:
+    description: The proxy's workload recordings (proxy -record), comma-separated paths.
+    required: false
+    default: ""
+  proxy-config:
+    description: The proxy's config, for its fanout policy (default policy without it is reject).
+    required: false
+    default: ""
+  baseline:
+    description: >-
+      A CI baseline (made by lokadb check -write-baseline). With it the action runs check -ci and
+      fails only on what the baseline has not accepted.
+    required: false
+    default: ""
+  fail-on:
+    description: >-
+      Without a baseline, the verdicts that fail the job: blocked (blocked, invalid spec; the
+      default), unsupported (also "not supported by LokaDB yet"), review (also "needs review").
+      An error of check itself always fails.
+    required: false
+    default: blocked
+  args:
+    description: More arguments for lokadb check, e.g. "-rtt 20 -profile fdw+direct".
+    required: false
+    default: ""
+  json:
+    description: Also write the JSON report (lokadb check -json) to this path, for later steps.
+    required: false
+    default: ""
+  version:
+    description: The lokadb release to use (a tag such as v0.1.0, or latest).
+    required: false
+    default: latest
+  image:
+    description: >-
+      Run lokadb from this container image instead of the release binary (e.g.
+      ghcr.io/lokadb/lokadb:v0.1.0). The job's runner must have Docker.
+    required: false
+    default: ""
+  comment:
+    description: On a pull request, post the summary as a comment (one comment, updated on each run).
+    required: false
+    default: "false"
+  github-token:
+    description: The token that posts the comment.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  verdict:
+    description: ready, review, unsupported, blocked, invalid_spec; with a baseline, ok or new
+    value: ${{ steps.check.outputs.verdict }}
+  exit-code:
+    description: The exit code of lokadb check (0 ready, 2 review, 3 blocked, 4 unsupported, 5 invalid spec, 6 new items under -ci, 1 error)
+    value: ${{ steps.check.outputs.exit-code }}
+  report:
+    description: The path of the text report.
+    value: ${{ steps.check.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install lokadb
+      id: install
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        IMAGE: ${{ inputs.image }}
+      run: |
+        set -euo pipefail
+        if [ -n "$IMAGE" ]; then
+          docker pull -q "$IMAGE" >/dev/null
+          echo "lokadb from the image $IMAGE"
+          exit 0
+        fi
+        case "$(uname -s)-$(uname -m)" in
+          Linux-x86_64) asset=lokadb-linux-amd64.tar.gz ;;
+          *) echo "::error::the lokadb release binary is built for Linux x86-64; on this runner use the image input"; exit 1 ;;
+        esac
+        if [ "$VERSION" = latest ]; then base=https://github.com/lokadb/lokadb/releases/latest/download
+        else base="https://github.com/lokadb/lokadb/releases/download/$VERSION"; fi
+        dir="$RUNNER_TEMP/lokadb"
+        mkdir -p "$dir"
+        curl -fsSL -o "$dir/$asset" "$base/$asset"
+        curl -fsSL -o "$dir/$asset.sha256" "$base/$asset.sha256"
+        (cd "$dir" && sha256sum -c "$asset.sha256")
+        tar -xzf "$dir/$asset" -C "$dir"
+        echo "$dir" >> "$GITHUB_PATH"
+        echo "lokadb $VERSION from $base"
+
+    - name: Run lokadb check
+      id: check
+      shell: bash
+      env:
+        LOKADB_DB: ${{ inputs.db }}
+        IN_SPEC: ${{ inputs.spec }}
+        IN_TENANT: ${{ inputs.tenant-column }}
+        IN_WORKLOAD: ${{ inputs.workload }}
+        IN_PROXY: ${{ inputs.proxy-config }}
+        IN_BASELINE: ${{ inputs.baseline }}
+        IN_FAIL_ON: ${{ inputs.fail-on }}
+        IN_ARGS: ${{ inputs.args }}
+        IN_JSON: ${{ inputs.json }}
+        IMAGE: ${{ inputs.image }}
+      run: |
+        set -uo pipefail
+        args=(-db env:LOKADB_DB)
+        [ -n "$IN_SPEC" ] && args+=(-spec "$IN_SPEC")
+        [ -n "$IN_TENANT" ] && args+=(-tenant-column "$IN_TENANT")
+        [ -n "$IN_WORKLOAD" ] && args+=(-workload "$IN_WORKLOAD")
+        [ -n "$IN_PROXY" ] && args+=(-proxy-config "$IN_PROXY")
+        [ -n "$IN_BASELINE" ] && args+=(-ci -baseline "$IN_BASELINE")
+        # shellcheck disable=SC2206 # args is a list of words by design
+        [ -n "$IN_ARGS" ] && args+=($IN_ARGS)
+        lokadb() {
+          if [ -n "$IMAGE" ]; then
+            docker run --rm --network host -e LOKADB_DB -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -w "$PWD" "$IMAGE" "$@"
+          else
+            command lokadb "$@"
+          fi
+        }
+        report="$RUNNER_TEMP/lokadb-check.txt"
+        lokadb check "${args[@]}" >"$report" 2>&1
+        rc=$?
+        if [ -n "$IN_JSON" ]; then
+          lokadb check "${args[@]}" -json >"$IN_JSON" 2>/dev/null || true
+        fi
+        cat "$report"
+        if [ -n "$IN_BASELINE" ]; then
+          case $rc in 0) verdict=ok ;; 6) verdict=new ;; *) verdict=error ;; esac
+        else
+          verdict=$(case $rc in 0) echo ready ;; 2) echo review ;; 3) echo blocked ;; 4) echo unsupported ;; 5) echo invalid_spec ;; *) echo error ;; esac)
+        fi
+        {
+          echo "verdict=$verdict"
+          echo "exit-code=$rc"
+          echo "report=$report"
+        } >>"$GITHUB_OUTPUT"
+        # the job's summary: the head of the report (a summary holds 1 MiB; the head says what matters)
+        {
+          echo "### lokadb check: $verdict"
+          echo
+          echo '```text'
+          head -c 60000 "$report"
+          echo '```'
+        } >>"$GITHUB_STEP_SUMMARY"
+        fail=0
+        if [ -n "$IN_BASELINE" ]; then
+          [ "$rc" = 0 ] || fail=1
+        else
+          case "$IN_FAIL_ON:$rc" in
+            *:1) fail=1 ;;
+            blocked:3 | blocked:5) fail=1 ;;
+            unsupported:3 | unsupported:4 | unsupported:5) fail=1 ;;
+            review:2 | review:3 | review:4 | review:5) fail=1 ;;
+          esac
+        fi
+        echo "fail=$fail" >>"$GITHUB_OUTPUT"
+
+    - name: Comment on the pull request
+      if: inputs.comment == 'true' && github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPORT: ${{ steps.check.outputs.report }}
+        VERDICT: ${{ steps.check.outputs.verdict }}
+        PR: ${{ github.event.pull_request.number }}
+      run: |
+        set -euo pipefail
+        marker='<!-- lokadb-check -->'
+        body="$marker
+        ### lokadb check: $VERDICT
+
+        \`\`\`text
+        $(head -c 60000 "$REPORT")
+        \`\`\`"
+        id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -n 1)
+        if [ -n "$id" ]; then
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -f body="$body" >/dev/null
+        else
+          gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -f body="$body" >/dev/null
+        fi
+
+    - name: Verdict
+      if: steps.check.outputs.fail == '1'
+      shell: bash
+      env:
+        VERDICT: ${{ steps.check.outputs.verdict }}
+        RC: ${{ steps.check.outputs.exit-code }}
+      run: |
+        echo "::error::lokadb check: $VERDICT (exit $RC); the report is in the job summary"
+        exit 1

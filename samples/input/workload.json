@@ -1,0 +1,12 @@
+{"version": 1, "updated": "2026-10-28T00:00:00Z", "databases": {"chat": {
+  "statements": [
+    {"sql": "SELECT \"conversations\".* FROM \"conversations\" WHERE \"conversations\".\"account_id\" = $1 ORDER BY \"conversations\".\"created_at\" DESC LIMIT $2", "count": 400},
+    {"sql": "SELECT \"messages\".* FROM \"messages\" WHERE \"messages\".\"conversation_id\" = $1 ORDER BY \"messages\".\"id\" ASC LIMIT $2", "count": 900},
+    {"sql": "SELECT \"messages\".* FROM \"messages\" WHERE \"messages\".\"account_id\" = $1 AND \"messages\".\"id\" = $2", "count": 1200},
+    {"sql": "INSERT INTO \"messages\" (\"account_id\", \"conversation_id\", \"body\") VALUES ($1, $2, $3) RETURNING \"id\"", "count": 150},
+    {"sql": "INSERT INTO \"audit_log\" (\"account_id\", \"action\") VALUES ($1, $2)", "count": 150}
+  ],
+  "transactions": [
+    {"statements": ["SELECT \"conversations\".* FROM \"conversations\" WHERE \"conversations\".\"account_id\" = $1 ORDER BY \"conversations\".\"created_at\" DESC LIMIT $2", "SELECT \"messages\".* FROM \"messages\" WHERE \"messages\".\"account_id\" = $1 AND \"messages\".\"id\" = $2"], "count": 100, "repeats": [100, 1000], "repeats_tx": 100},
+    {"statements": ["INSERT INTO \"messages\" (\"account_id\", \"conversation_id\", \"body\") VALUES ($1, $2, $3) RETURNING \"id\"", "INSERT INTO \"audit_log\" (\"account_id\", \"action\") VALUES ($1, $2)"], "count": 150, "form": "block"}
+  ]}}}

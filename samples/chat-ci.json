@@ -1,0 +1,326 @@
+{
+  "schema_version": 1,
+  "lokadb_version": "(devel)",
+  "database": "chat",
+  "verdict": "blocked",
+  "summary": {
+    "tables": 2,
+    "tables_ready": 2,
+    "tables_unsupported": 0,
+    "unique_constraints_becoming_per_organization": 0,
+    "query_patterns": 4,
+    "query_patterns_without_organization": 1,
+    "query_patterns_refused_by_proxy": 1,
+    "transaction_patterns": 1,
+    "transaction_patterns_writing_cloud_and_lokadb": 1,
+    "transactions_checked": true
+  },
+  "tables": [
+    {
+      "name": "conversations",
+      "schema": "public",
+      "tenant": "account_id",
+      "rows_estimate": 20,
+      "ready": true,
+      "state": "ready"
+    },
+    {
+      "name": "messages",
+      "schema": "public",
+      "tenant": "account_id",
+      "rows_estimate": 100,
+      "ready": true,
+      "state": "ready"
+    }
+  ],
+  "spec": {
+    "tables": [
+      {
+        "name": "conversations",
+        "tenant_column": "account_id"
+      },
+      {
+        "name": "messages",
+        "tenant_column": "account_id"
+      }
+    ]
+  },
+  "workload_sources": [
+    "proxy recording workload.json: 5 statements, 2 transaction shapes, updated 2026-10-28T00:00:00Z"
+  ],
+  "fanout_policy": "reject, 0 statements allowed (default, no -proxy-config)",
+  "fanout": {
+    "mode": "reject",
+    "allow": [],
+    "source": "default"
+  },
+  "suggested_routing": {
+    "relations": [
+      {
+        "from": "messages.conversation_id",
+        "to": "conversations.id"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "severity": "blocker",
+      "code": "query_refused",
+      "key": "query_refused",
+      "message": "1 query pattern touches LokaDB tables without naming the organization, and after enable the proxy refuses them (fanout policy \"reject\" of database chat): the application gets an error. Restrict them by the organization, or review them and add them to \"allow\" in the proxy config",
+      "examples": [
+        "x900  SELECT \"messages\".* FROM \"messages\" WHERE \"messages\".\"conversation_id\" = $1 ORDER BY \"messages\".\"id\" ASC LIMIT $2"
+      ],
+      "patterns": [
+        {
+          "fingerprint": "3cea01a714f06d14",
+          "sql": "SELECT \"messages\".* FROM \"messages\" WHERE \"messages\".\"conversation_id\" = $1 ORDER BY \"messages\".\"id\" ASC LIMIT $2",
+          "calls": 900,
+          "write": false,
+          "tables": [
+            "messages"
+          ],
+          "sources": [
+            "recording:workload.json"
+          ],
+          "gaps": [
+            {
+              "kind": "unknown_column",
+              "table": "messages",
+              "column": "conversation_id",
+              "form": "="
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "severity": "change",
+      "code": "fk_to_cloud",
+      "key": "fk_to_cloud",
+      "message": "FKs from LokaDB tables to cloud tables: for a moved organization, whose rows are in its own database, lokadb's triggers stand in for them. A row written through the cloud must reference an existing cloud row, and deleting or changing the key of a cloud row applies the FK's action (CASCADE, SET NULL, RESTRICT) in the moved organizations' databases too (see fk_to_cloud_delete). There they are checked at the end of each statement, even if DEFERRABLE, and writes that do not go through the cloud database (made in the organization's database itself) are not checked",
+      "examples": [
+        "conversations.account_id -\u003e accounts",
+        "messages.account_id -\u003e accounts"
+      ]
+    },
+    {
+      "severity": "change",
+      "code": "mixed_write_transaction",
+      "key": "mixed_write_transaction:audit_log+messages",
+      "object": "audit_log + messages",
+      "subject": {
+        "kind": "tables",
+        "cloud_tables": [
+          "audit_log"
+        ],
+        "lokadb_tables": [
+          "messages"
+        ]
+      },
+      "message": "1 transaction shape writes cloud tables (audit_log) and LokaDB tables (messages) together, 150 transactions seen. Once the organization lives in its own database these are two commits without two-phase commit: its database commits first, and a failure in between leaves only that side written",
+      "examples": [
+        "INSERT INTO \"messages\" (\"account_id\", \"conversation_id\", \"body\") VALUES ($1, $2, $3) RETURNING \"id\"",
+        "INSERT INTO \"audit_log\" (\"account_id\", \"action\") VALUES ($1, $2)"
+      ],
+      "transactions": [
+        {
+          "cloud_tables": [
+            "audit_log"
+          ],
+          "lokadb_tables": [
+            "messages"
+          ],
+          "shapes": 1,
+          "count": 150,
+          "statements": [
+            {
+              "fingerprint": "b2b8f8ce3d38fe02",
+              "sql": "INSERT INTO \"messages\" (\"account_id\", \"conversation_id\", \"body\") VALUES ($1, $2, $3) RETURNING \"id\"",
+              "write": true,
+              "tables": [
+                "messages"
+              ]
+            },
+            {
+              "fingerprint": "fab5e4fddc6b7e2b",
+              "sql": "INSERT INTO \"audit_log\" (\"account_id\", \"action\") VALUES ($1, $2)",
+              "write": true,
+              "tables": [
+                "audit_log"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "severity": "warning",
+      "code": "fk_to_cloud_delete",
+      "key": "fk_to_cloud_delete:public.accounts",
+      "object": "accounts",
+      "subject": {
+        "kind": "table",
+        "schema": "public",
+        "table": "accounts"
+      },
+      "message": "accounts is referenced by LokaDB tables (conversations.account_id -\u003e accounts; messages.account_id -\u003e accounts) and does not tell the organization of its rows (it is not in routing.cloud_tables): once an organization is moved, deleting a row of accounts or changing its key has to check or change the rows referencing it in every moved organization's database, as a statement on LokaDB tables of no one organization does. With the fanout policy is reject (default, no -proxy-config) lokadb refuses such a DELETE or UPDATE as soon as one organization is moved, the rows referencing it or not. To keep it within one organization's database, declare accounts in routing.cloud_tables with the column that holds the organization of its rows, or set the fanout policy of the database to log or allow"
+    },
+    {
+      "severity": "info",
+      "code": "tenant_table_in_cloud",
+      "key": "tenant_table_in_cloud",
+      "message": "these tables have an organization column but are not in the spec: their rows stay in the cloud (audit_log)"
+    },
+    {
+      "severity": "info",
+      "code": "no_pg_stat_statements",
+      "key": "no_pg_stat_statements",
+      "message": "pg_stat_statements is not installed in this database: its statistics are not used"
+    },
+    {
+      "severity": "info",
+      "code": "routing_suggestion",
+      "key": "routing_suggestion",
+      "object": "messages.conversation_id",
+      "message": "messages.conversation_id has no FK, but by its name it holds the id of a conversations row: declaring the relation routes 1 pattern (900 calls). Data: 100 of 100 rows have the parent, 0 of them in another organization. Declaration: {\"routing\":{\"relations\":[{\"from\":\"messages.conversation_id\",\"to\":\"conversations.id\"}]}}",
+      "examples": [
+        "x900  SELECT \"messages\".* FROM \"messages\" WHERE \"messages\".\"conversation_id\" = $1 ORDER BY \"messages\".\"id\" ASC LIMIT $2"
+      ],
+      "suggestion": {
+        "kind": "relation",
+        "routing": {
+          "relations": [
+            {
+              "from": "messages.conversation_id",
+              "to": "conversations.id"
+            }
+          ]
+        },
+        "data_check": {
+          "rows": 100,
+          "parents_found": 100,
+          "parents_of_another_organization": 0
+        },
+        "patterns": [
+          "3cea01a714f06d14"
+        ],
+        "calls": 900
+      }
+    },
+    {
+      "severity": "info",
+      "code": "feed_index",
+      "key": "feed_index:public.conversations:account_id,created_at",
+      "object": "conversations.created_at",
+      "subject": {
+        "kind": "index",
+        "schema": "public",
+        "table": "conversations",
+        "columns": [
+          "account_id",
+          "created_at"
+        ]
+      },
+      "message": "1 query pattern read one organization's rows of conversations ordered by created_at with a LIMIT (a feed), and conversations has no index on (account_id, created_at): Postgres then reads the organization's rows along another index, or all of them, and sorts, with lokadb as without it, and through the proxy the plan is worse still. With the index it reads only the rows the LIMIT returns: a feed of 20 measured 94 → 3,8 ms through the proxy (research/ANALYSIS.md, the feed of F7). Create it before enable: move-org makes the organizations' tables with the cloud's indexes. After enable, create it through the proxy as a migration (without CONCURRENTLY): the proxy replays it in the organizations' databases",
+      "examples": [
+        "x400  SELECT \"conversations\".* FROM \"conversations\" WHERE \"conversations\".\"account_id\" = $1 ORDER BY \"conversations\".\"created_at\" DESC LIMIT $2",
+        "CREATE INDEX ON \"conversations\" (\"account_id\", \"created_at\")"
+      ],
+      "patterns": [
+        {
+          "fingerprint": "bed2c5a2c9f23a7c",
+          "sql": "SELECT \"conversations\".* FROM \"conversations\" WHERE \"conversations\".\"account_id\" = $1 ORDER BY \"conversations\".\"created_at\" DESC LIMIT $2",
+          "calls": 400,
+          "write": false
+        }
+      ]
+    },
+    {
+      "severity": "info",
+      "code": "cloud_wal_level",
+      "key": "cloud_wal_level:cloud:wal_level",
+      "object": "wal_level",
+      "subject": {
+        "kind": "setting",
+        "side": "cloud",
+        "setting": "wal_level"
+      },
+      "message": "the cloud database has wal_level = replica: move-org moves organizations with triggers (no logical replication; wal_level = logical, a restart, would let it subscribe instead)"
+    },
+    {
+      "severity": "info",
+      "code": "cloud_postgres_fdw_install",
+      "key": "cloud_postgres_fdw_install:cloud:postgres_fdw",
+      "object": "postgres_fdw",
+      "subject": {
+        "kind": "extension",
+        "side": "cloud",
+        "extension": "postgres_fdw"
+      },
+      "message": "postgres_fdw is not installed in the cloud database: move-org installs it (tried and rolled back)"
+    }
+  ],
+  "ci": {
+    "baseline": "",
+    "new": [
+      {
+        "key": "query_refused:fp:3cea01a714f06d14",
+        "severity": "blocker",
+        "code": "query_refused",
+        "pattern": {
+          "fingerprint": "3cea01a714f06d14",
+          "sql": "SELECT \"messages\".* FROM \"messages\" WHERE \"messages\".\"conversation_id\" = $1 ORDER BY \"messages\".\"id\" ASC LIMIT $2",
+          "calls": 900,
+          "write": false,
+          "tables": [
+            "messages"
+          ],
+          "sources": [
+            "recording:workload.json"
+          ],
+          "gaps": [
+            {
+              "kind": "unknown_column",
+              "table": "messages",
+              "column": "conversation_id",
+              "form": "="
+            }
+          ]
+        },
+        "hint": "the proxy refuses it after enable: restrict it by the organization (its column, id or a parent id, = or IN), or, if it is meant to read every organization, accept it here and add it to \"allow\" of the proxy config"
+      },
+      {
+        "key": "fk_to_cloud:ex:conversations.account_id -\u003e accounts",
+        "severity": "change",
+        "code": "fk_to_cloud",
+        "object": "conversations.account_id -\u003e accounts",
+        "hint": "FKs from LokaDB tables to cloud tables: for a moved organization, whose rows are in its own database, lokadb's triggers stand in for them. A row written through the cloud must reference an existing cloud row, and deleting or changing the key of a cloud row applies the FK's action (CASCADE, SET NULL, RESTRICT) in the moved organizations' databases too (see fk_to_cloud_delete). There they are checked at the end of each statement, even if DEFERRABLE, and writes that do not go through the cloud database (made in the organization's database itself) are not checked"
+      },
+      {
+        "key": "fk_to_cloud:ex:messages.account_id -\u003e accounts",
+        "severity": "change",
+        "code": "fk_to_cloud",
+        "object": "messages.account_id -\u003e accounts",
+        "hint": "FKs from LokaDB tables to cloud tables: for a moved organization, whose rows are in its own database, lokadb's triggers stand in for them. A row written through the cloud must reference an existing cloud row, and deleting or changing the key of a cloud row applies the FK's action (CASCADE, SET NULL, RESTRICT) in the moved organizations' databases too (see fk_to_cloud_delete). There they are checked at the end of each statement, even if DEFERRABLE, and writes that do not go through the cloud database (made in the organization's database itself) are not checked"
+      },
+      {
+        "key": "mixed_write_transaction:audit_log+messages",
+        "severity": "change",
+        "code": "mixed_write_transaction",
+        "object": "audit_log + messages",
+        "hint": "a transaction writing cloud and LokaDB tables: move the cloud table to LokaDB too, or accept the two commits here"
+      },
+      {
+        "key": "fk_to_cloud_delete:public.accounts",
+        "severity": "warning",
+        "code": "fk_to_cloud_delete",
+        "object": "accounts",
+        "hint": "accounts is referenced by LokaDB tables (conversations.account_id -\u003e accounts; messages.account_id -\u003e accounts) and does not tell the organization of its rows (it is not in routing.cloud_tables): once an organization is moved, deleting a row of accounts or changing its key has to check or change the rows referencing it in every moved organization's database, as a statement on LokaDB tables of no one organization does. With the fanout policy is reject (default, no -proxy-config) lokadb refuses such a DELETE or UPDATE as soon as one organization is moved, the rows referencing it or not. To keep it within one organization's database, declare accounts in routing.cloud_tables with the column that holds the organization of its rows, or set the fanout policy of the database to log or allow"
+      }
+    ],
+    "stale": [],
+    "accepted": 0,
+    "accepted_without_reason": 0
+  }
+}

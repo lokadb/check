@@ -1,0 +1,56 @@
+Database compatibility report: chat
+Verdict: BLOCKED: the migration is blocked until the blockers below are fixed
+
+  2 of 2 tables ready for tenant partitioning
+  0 global unique constraints become per organization after the move
+  1 query pattern does not name the organization (of 4 on LokaDB tables), 1 refused by the proxy
+  1 transaction shape writes cloud and LokaDB tables together (of 1 writing LokaDB tables)
+  source: proxy recording workload.json: 5 statements, 2 transaction shapes, updated 2026-10-28T00:00:00Z
+  proxy policy for queries without the organization: reject, 0 statements allowed (default, no -proxy-config)
+
+Latency of a moved organization at RTT 20 ms (estimate, from block 14's measurement on a real network, research/bench/2026-10-27-rtt; the steady state: a session's first direct connection and the probe after idle are not counted)
+  all recorded transactions: 85000 ms on FDW, 39000 ms with the direct path now; goal 30000 ms (the limit: one exchange per statement and one for COMMIT)
+          fdw   direct now         goal
+       700 ms       240 ms       240 ms  x100    2 statements, first: SELECT "conversations".* FROM "conversations" WHERE "conversations"."account_id" = $1 ORDER BY "conversations"."created_at" DESC LIMIT $2
+       100 ms       100 ms      40.0 ms  x150    2 statements, first: INSERT INTO "messages" ("account_id", "conversation_id", "body") VALUES ($1, $2, $3) RETURNING "id"
+
+Tables
+  conversations                account_id                           rows: ~20        ready
+  messages                     account_id                           rows: ~100       ready
+
+Blockers (1)
+  [query_refused] 1 query pattern touches LokaDB tables without naming the organization, and after enable the proxy refuses them (fanout policy "reject" of database chat): the application gets an error. Restrict them by the organization, or review them and add them to "allow" in the proxy config
+      x900  SELECT "messages".* FROM "messages" WHERE "messages"."conversation_id" = $1 ORDER BY "messages"."id" ASC LIMIT $2
+
+Changes after the migration (the application works, but these behave differently) (2)
+  [fk_to_cloud] FKs from LokaDB tables to cloud tables: for a moved organization, whose rows are in its own database, lokadb's triggers stand in for them. A row written through the cloud must reference an existing cloud row, and deleting or changing the key of a cloud row applies the FK's action (CASCADE, SET NULL, RESTRICT) in the moved organizations' databases too (see fk_to_cloud_delete). There they are checked at the end of each statement, even if DEFERRABLE, and writes that do not go through the cloud database (made in the organization's database itself) are not checked
+      conversations.account_id -> accounts
+      messages.account_id -> accounts
+  [mixed_write_transaction] 1 transaction shape writes cloud tables (audit_log) and LokaDB tables (messages) together, 150 transactions seen. Once the organization lives in its own database these are two commits without two-phase commit: its database commits first, and a failure in between leaves only that side written
+      INSERT INTO "messages" ("account_id", "conversation_id", "body") VALUES ($1, $2, $3) RETURNING "id"
+      INSERT INTO "audit_log" ("account_id", "action") VALUES ($1, $2)
+
+Warnings (1)
+  [fk_to_cloud_delete] accounts is referenced by LokaDB tables (conversations.account_id -> accounts; messages.account_id -> accounts) and does not tell the organization of its rows (it is not in routing.cloud_tables): once an organization is moved, deleting a row of accounts or changing its key has to check or change the rows referencing it in every moved organization's database, as a statement on LokaDB tables of no one organization does. With the fanout policy is reject (default, no -proxy-config) lokadb refuses such a DELETE or UPDATE as soon as one organization is moved, the rows referencing it or not. To keep it within one organization's database, declare accounts in routing.cloud_tables with the column that holds the organization of its rows, or set the fanout policy of the database to log or allow
+
+Info (10)
+  [tenant_table_in_cloud] these tables have an organization column but are not in the spec: their rows stay in the cloud (audit_log)
+  [no_pg_stat_statements] pg_stat_statements is not installed in this database: its statistics are not used
+  [routing_suggestion] messages.conversation_id has no FK, but by its name it holds the id of a conversations row: declaring the relation routes 1 pattern (900 calls). Data: 100 of 100 rows have the parent, 0 of them in another organization. Declaration: {"routing":{"relations":[{"from":"messages.conversation_id","to":"conversations.id"}]}}
+      x900  SELECT "messages".* FROM "messages" WHERE "messages"."conversation_id" = $1 ORDER BY "messages"."id" ASC LIMIT $2
+  [feed_index] 1 query pattern read one organization's rows of conversations ordered by created_at with a LIMIT (a feed), and conversations has no index on (account_id, created_at): Postgres then reads the organization's rows along another index, or all of them, and sorts, with lokadb as without it, and through the proxy the plan is worse still. With the index it reads only the rows the LIMIT returns: a feed of 20 measured 94 → 3,8 ms through the proxy (research/ANALYSIS.md, the feed of F7). Create it before enable: move-org makes the organizations' tables with the cloud's indexes. After enable, create it through the proxy as a migration (without CONCURRENTLY): the proxy replays it in the organizations' databases
+      x400  SELECT "conversations".* FROM "conversations" WHERE "conversations"."account_id" = $1 ORDER BY "conversations"."created_at" DESC LIMIT $2
+      CREATE INDEX ON "conversations" ("account_id", "created_at")
+  [latency_estimate] at 20 ms between the cloud and the organization's database, the 2 transaction shapes recorded on LokaDB tables would wait about 85000 ms on the FDW path (fdw) and 39000 ms with the direct path as the proxy takes it now (fdw+direct: single statements, and transactions whose statements it all takes, once it has learnt their form); the limit, with everything that is left on the direct path too, is 30000 ms (one exchange per statement and one for COMMIT). An estimate: exchanges per statement are from block 14's measurement on a real network, research/bench/2026-10-27-rtt (on FDW a SELECT 5, an insert 3 and 2 per transaction, an UPDATE or DELETE 8; direct 1 per statement and 1 for COMMIT), repeats within a transaction from the recording's counts, big results and multi-row inserts take more. It is the steady state: a session's first direct connection to the organization's database (4-6 exchanges without direct_pool) and the probe after 30 s idle are not counted, so for short sessions it is optimistic
+  [latency_expensive_transaction] a transaction of 2 statements, seen 100 times, would take about 700 ms (35 exchanges with the organization's database at 20 ms); with the direct path 240 ms (12); the direct path's goal 240 ms (12)
+      3 exchanges  SELECT "conversations".* FROM "conversations" WHERE "conversations"."account_id" = $1 ORDER BY "conversations"."created_at" DESC LIMIT $2
+      30 exchanges ×10.0  SELECT "messages".* FROM "messages" WHERE "messages"."account_id" = $1 AND "messages"."id" = $2
+  [latency_expensive_transaction] a transaction of 2 statements, seen 150 times, would take about 100 ms (5 exchanges with the organization's database at 20 ms); the direct path's goal 40.0 ms (2)
+      3 exchanges  INSERT INTO "messages" ("account_id", "conversation_id", "body") VALUES ($1, $2, $3) RETURNING "id"
+  [latency_n_plus_one] a statement runs about 10.0 times per transaction (a chain of the same query, N+1): each costs 3 exchanges with the organization's database, 60.0 ms at 20 ms, so about 600 ms per transaction. One query for all the rows (IN, a JOIN) costs one
+      SELECT "messages".* FROM "messages" WHERE "messages"."account_id" = $1 AND "messages"."id" = $2
+  [cloud_wal_level] the cloud database has wal_level = replica: move-org moves organizations with triggers (no logical replication; wal_level = logical, a restart, would let it subscribe instead)
+  [cloud_postgres_fdw_install] postgres_fdw is not installed in the cloud database: move-org installs it (tried and rolled back)
+
+The report covers the schema and the queries seen so far. Queries nobody has run yet (rare code paths,
+dynamic SQL) are not covered: test the application through the proxy before moving an organization.

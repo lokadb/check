@@ -1,0 +1,274 @@
+{
+  "schema_version": 1,
+  "lokadb_version": "(devel)",
+  "database": "badapp",
+  "verdict": "unsupported",
+  "summary": {
+    "tables": 4,
+    "tables_ready": 3,
+    "tables_unsupported": 1,
+    "unique_constraints_becoming_per_organization": 1,
+    "query_patterns": 0,
+    "query_patterns_without_organization": 0,
+    "query_patterns_refused_by_proxy": 0,
+    "transaction_patterns": 0,
+    "transaction_patterns_writing_cloud_and_lokadb": 0,
+    "transactions_checked": false
+  },
+  "tables": [
+    {
+      "name": "users",
+      "schema": "public",
+      "tenant": "organization_id",
+      "rows_estimate": 0,
+      "ready": true,
+      "state": "review"
+    },
+    {
+      "name": "documents",
+      "schema": "public",
+      "tenant": "organization_id",
+      "rows_estimate": 2,
+      "ready": true,
+      "state": "ready"
+    },
+    {
+      "name": "document_versions",
+      "schema": "public",
+      "tenant": "via document_id -\u003e documents",
+      "rows_estimate": 3,
+      "ready": true,
+      "state": "review"
+    },
+    {
+      "name": "attachments",
+      "schema": "public",
+      "tenant": "organization_id",
+      "rows_estimate": 0,
+      "ready": false,
+      "state": "unsupported"
+    }
+  ],
+  "spec": {
+    "tables": [
+      {
+        "name": "users",
+        "tenant_column": "organization_id"
+      },
+      {
+        "name": "documents",
+        "tenant_column": "organization_id"
+      },
+      {
+        "name": "document_versions",
+        "parent_table": "documents",
+        "parent_column": "document_id"
+      },
+      {
+        "name": "attachments",
+        "tenant_column": "organization_id"
+      }
+    ]
+  },
+  "workload_sources": [],
+  "fanout_policy": "reject, 0 statements allowed (default, no -proxy-config)",
+  "fanout": {
+    "mode": "reject",
+    "allow": [],
+    "source": "default"
+  },
+  "findings": [
+    {
+      "severity": "unsupported",
+      "code": "id_type",
+      "key": "id_type:public.attachments:id",
+      "object": "attachments.id",
+      "subject": {
+        "kind": "column",
+        "schema": "public",
+        "table": "attachments",
+        "column": "id"
+      },
+      "message": "attachments.id is character(26): lokadb takes keys of type smallint, integer, bigint, uuid, text or varchar (under a deterministic collation) so far"
+    },
+    {
+      "severity": "change",
+      "code": "orphan_rows",
+      "key": "orphan_rows:public.document_versions",
+      "object": "document_versions",
+      "subject": {
+        "kind": "table",
+        "schema": "public",
+        "table": "document_versions"
+      },
+      "message": "2 rows of document_versions have no row in documents (document_id is NULL or points nowhere), so no organization (nor do rows under a parent that has none): after enable they stay in the cloud (document_versions__none): no organization's move takes them; statements without an organization see them as before, an organization's statements never did. Giving such a row a parent of an organization is refused (lokadb does not move a row to another organization by its parent)",
+      "measure": {
+        "rows": 2,
+        "of": 3,
+        "method": "exact"
+      }
+    },
+    {
+      "severity": "change",
+      "code": "unique_not_tenant_scoped",
+      "key": "unique_not_tenant_scoped:public.users:users_email_key",
+      "object": "users_email_key",
+      "subject": {
+        "kind": "constraint",
+        "schema": "public",
+        "table": "users",
+        "constraint": "users_email_key",
+        "columns": [
+          "email"
+        ]
+      },
+      "message": "users_email_key on users is global today; after the move it holds within each organization only, and two organizations can store the same value. Fine if the application never relies on it across organizations; otherwise add organization_id to the key, or keep this uniqueness in a cloud table",
+      "examples": [
+        "CREATE UNIQUE INDEX users_email_key ON public.users USING btree (email)"
+      ]
+    },
+    {
+      "severity": "change",
+      "code": "identity_always",
+      "key": "identity_always:public.users",
+      "object": "users",
+      "subject": {
+        "kind": "table",
+        "schema": "public",
+        "table": "users"
+      },
+      "message": "users has GENERATED ALWAYS identity columns: enable turns them into sequence defaults, so an INSERT that supplies its own value is accepted instead of refused",
+      "examples": [
+        "invite_no"
+      ]
+    },
+    {
+      "severity": "change",
+      "code": "fk_to_cloud",
+      "key": "fk_to_cloud",
+      "message": "FKs from LokaDB tables to cloud tables: for a moved organization, whose rows are in its own database, lokadb's triggers stand in for them. A row written through the cloud must reference an existing cloud row, and deleting or changing the key of a cloud row applies the FK's action (CASCADE, SET NULL, RESTRICT) in the moved organizations' databases too (see fk_to_cloud_delete). There they are checked at the end of each statement, even if DEFERRABLE, and writes that do not go through the cloud database (made in the organization's database itself) are not checked",
+      "examples": [
+        "documents.organization_id -\u003e organizations",
+        "users.organization_id -\u003e organizations"
+      ]
+    },
+    {
+      "severity": "warning",
+      "code": "child_without_fk",
+      "key": "child_without_fk:public.document_versions:document_id",
+      "object": "document_versions.document_id",
+      "subject": {
+        "kind": "column",
+        "schema": "public",
+        "table": "document_versions",
+        "column": "document_id"
+      },
+      "message": "document_versions.document_id has no FK to documents: the proxy cannot find the organization from it, so queries by document_id run in every organization's database"
+    },
+    {
+      "severity": "warning",
+      "code": "fk_to_cloud_delete",
+      "key": "fk_to_cloud_delete:public.organizations",
+      "object": "organizations",
+      "subject": {
+        "kind": "table",
+        "schema": "public",
+        "table": "organizations"
+      },
+      "message": "organizations is referenced by LokaDB tables (documents.organization_id -\u003e organizations; users.organization_id -\u003e organizations) and does not tell the organization of its rows (it is not in routing.cloud_tables): once an organization is moved, deleting a row of organizations or changing its key has to check or change the rows referencing it in every moved organization's database, as a statement on LokaDB tables of no one organization does. With the fanout policy is reject (default, no -proxy-config) lokadb refuses such a DELETE or UPDATE as soon as one organization is moved, the rows referencing it or not. To keep it within one organization's database, declare organizations in routing.cloud_tables with the column that holds the organization of its rows, or set the fanout policy of the database to log or allow"
+    },
+    {
+      "severity": "warning",
+      "code": "no_workload",
+      "key": "no_workload",
+      "message": "no queries were checked: install pg_stat_statements, or record traffic through the proxy (proxy -record FILE) and pass -workload FILE"
+    },
+    {
+      "severity": "info",
+      "code": "rls_enabled",
+      "key": "rls_enabled:public.users",
+      "object": "users",
+      "subject": {
+        "kind": "table",
+        "schema": "public",
+        "table": "users"
+      },
+      "message": "row-level security of users moves to the new parent table: its policies apply as before, and lokadb's organization policy (restrictive) narrows them. The owner, whom row security did not apply to unless forced, keeps access through policy lokadb_owner"
+    },
+    {
+      "severity": "info",
+      "code": "dependents_repointed",
+      "key": "dependents_repointed:public.documents",
+      "object": "documents",
+      "subject": {
+        "kind": "table",
+        "schema": "public",
+        "table": "documents"
+      },
+      "message": "enable points what depends on documents at the new parent table, with its own definition (CREATE OR REPLACE): it then reads every organization, the moved ones too",
+      "examples": [
+        "view document_counts"
+      ]
+    },
+    {
+      "severity": "info",
+      "code": "triggers_carried",
+      "key": "triggers_carried:public.documents",
+      "object": "documents",
+      "subject": {
+        "kind": "table",
+        "schema": "public",
+        "table": "documents"
+      },
+      "message": "enable moves the triggers of documents to the new parent table: they keep firing in the cloud database for every organization, the moved ones too (through their foreign partitions), and not for the rows move-org shifts between partitions",
+      "examples": [
+        "documents_touch"
+      ]
+    },
+    {
+      "severity": "info",
+      "code": "grants_carried",
+      "key": "grants_carried:public.documents",
+      "object": "documents",
+      "subject": {
+        "kind": "table",
+        "schema": "public",
+        "table": "documents"
+      },
+      "message": "other roles have privileges on documents: enable grants them on the new parent table, with what they need around it (schema lokadb, the refs table, the sequences); the table itself becomes the cloud's partition and keeps none, so they cannot pass by the organization policy",
+      "examples": [
+        "app"
+      ]
+    },
+    {
+      "severity": "info",
+      "code": "no_pg_stat_statements",
+      "key": "no_pg_stat_statements",
+      "message": "pg_stat_statements is not installed in this database: its statistics are not used"
+    },
+    {
+      "severity": "info",
+      "code": "cloud_wal_level",
+      "key": "cloud_wal_level:cloud:wal_level",
+      "object": "wal_level",
+      "subject": {
+        "kind": "setting",
+        "side": "cloud",
+        "setting": "wal_level"
+      },
+      "message": "the cloud database has wal_level = replica: move-org moves organizations with triggers (no logical replication; wal_level = logical, a restart, would let it subscribe instead)"
+    },
+    {
+      "severity": "info",
+      "code": "cloud_postgres_fdw_install",
+      "key": "cloud_postgres_fdw_install:cloud:postgres_fdw",
+      "object": "postgres_fdw",
+      "subject": {
+        "kind": "extension",
+        "side": "cloud",
+        "extension": "postgres_fdw"
+      },
+      "message": "postgres_fdw is not installed in the cloud database: move-org installs it (tried and rolled back)"
+    }
+  ]
+}

@@ -1,0 +1,234 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/lokadb/check/schema/report-v1.schema.json",
+  "title": "lokadb check report, schema_version 1",
+  "description": "The output of `lokadb check -json`. A consumer must skip fields and finding codes it does not know: adding a field, a code, a subject kind or an enum value of an open list is compatible; removing or renaming one raises schema_version. severity, verdict and table state are closed enumerations.",
+  "type": "object",
+  "required": ["schema_version", "lokadb_version", "database", "verdict", "summary", "tables", "workload_sources", "fanout_policy", "findings"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "lokadb_version": {"type": "string", "description": "the build of lokadb that made the report"},
+    "database": {"type": "string", "description": "the SaaS's (cloud) database"},
+    "verdict": {"$ref": "#/$defs/verdict"},
+    "summary": {"$ref": "#/$defs/summary"},
+    "tables": {"type": "array", "items": {"$ref": "#/$defs/table"}},
+    "suggested_spec": {"$ref": "#/$defs/spec", "description": "with -tenant-column or -org-table: the spec found"},
+    "discovery": {"$ref": "#/$defs/discovery", "description": "only with -org-table: why every table is in the spec or not"},
+    "spec": {"$ref": "#/$defs/spec", "description": "the spec the report was computed with (absent after enable)"},
+    "workload_sources": {"type": "array", "items": {"type": "string"}, "description": "for people"},
+    "fanout_policy": {"type": "string", "description": "for people; fanout is the machine-readable form"},
+    "fanout": {
+      "type": "object",
+      "required": ["mode", "allow", "source"],
+      "properties": {
+        "mode": {"type": "string"},
+        "allow": {"type": "array", "items": {"type": "string"}, "description": "fingerprints of the proxy's allow list, sorted"},
+        "source": {"type": "string", "description": "the proxy config file, or default"}
+      }
+    },
+    "suggested_routing": {"$ref": "#/$defs/routing", "description": "with -suggest: every suggested declaration as one patch"},
+    "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "ci": {"$ref": "#/$defs/ci"},
+    "profile": {"$ref": "#/$defs/profile"},
+    "latency": {"$ref": "#/$defs/latency"}
+  },
+  "$defs": {
+    "verdict": {"enum": ["ready", "review", "unsupported", "blocked", "invalid_spec"], "description": "exit codes 0, 2, 4, 3, 5"},
+    "severity": {"enum": ["spec_error", "blocker", "unsupported", "change", "warning", "info"]},
+    "strings": {"type": "array", "items": {"type": "string"}},
+    "summary": {
+      "type": "object",
+      "required": ["tables", "tables_ready", "tables_unsupported", "unique_constraints_becoming_per_organization", "query_patterns",
+        "query_patterns_without_organization", "query_patterns_refused_by_proxy", "transaction_patterns",
+        "transaction_patterns_writing_cloud_and_lokadb", "transactions_checked"],
+      "properties": {
+        "tables": {"type": "integer", "minimum": 0},
+        "tables_ready": {"type": "integer", "minimum": 0},
+        "tables_unsupported": {"type": "integer", "minimum": 0},
+        "unique_constraints_becoming_per_organization": {"type": "integer", "minimum": 0},
+        "query_patterns": {"type": "integer", "minimum": 0},
+        "query_patterns_without_organization": {"type": "integer", "minimum": 0},
+        "query_patterns_refused_by_proxy": {"type": "integer", "minimum": 0},
+        "transaction_patterns": {"type": "integer", "minimum": 0},
+        "transaction_patterns_writing_cloud_and_lokadb": {"type": "integer", "minimum": 0},
+        "transactions_checked": {"type": "boolean"}
+      }
+    },
+    "table": {
+      "type": "object",
+      "required": ["name", "schema", "tenant", "rows_estimate", "ready", "state"],
+      "properties": {
+        "name": {"type": "string"},
+        "schema": {"type": "string"},
+        "tenant": {"type": "string", "description": "how its rows find their organization"},
+        "rows_estimate": {"type": "integer", "minimum": -1, "description": "-1: not counted"},
+        "ready": {"type": "boolean"},
+        "state": {"enum": ["ready", "review", "unsupported", "blocked", "spec_error"]}
+      }
+    },
+    "discovery": {
+      "type": "object",
+      "properties": {
+        "org_table": {"type": "string"},
+        "key": {"type": "string"},
+        "key_kind": {"enum": ["int", "uuid"]},
+        "spec": {"$ref": "#/$defs/spec"},
+        "tables": {"type": "array", "items": {
+          "type": "object",
+          "required": ["table", "role"],
+          "properties": {
+            "table": {"type": "string"},
+            "role": {"enum": ["organization", "root", "child", "cloud", "ambiguous"]},
+            "column": {"type": "string", "description": "a root's organization column, a child's column to its parent"},
+            "parent": {"type": "string"},
+            "path": {"type": "array", "items": {"type": "string"}, "description": "from the table up to the organizations table"},
+            "basis": {"enum": ["fk", "name"], "description": "name: a column named by the convention, verified on the data"},
+            "code": {"type": "string", "description": "why the table stays in the cloud or is ambiguous"},
+            "reason": {"type": "string"},
+            "options": {"type": "array", "items": {"type": "object", "properties": {"column": {"type": "string"}, "target": {"type": "string"}}}}
+          }
+        }}
+      }
+    },
+    "spec": {
+      "type": "object",
+      "properties": {
+        "tables": {"type": "array", "items": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}}},
+        "routing": {"$ref": "#/$defs/routing"}
+      }
+    },
+    "routing": {
+      "type": "object",
+      "properties": {
+        "relations": {"type": "array", "items": {"type": "object", "required": ["from", "to"],
+          "properties": {"from": {"type": "string"}, "to": {"type": "string"}, "confirmed": {"type": "boolean"}}}},
+        "cloud_tables": {"type": "array", "items": {"type": "object", "required": ["table", "tenant_column"],
+          "properties": {"table": {"type": "string"}, "tenant_column": {"type": "string"}}}},
+        "keys": {"type": "array", "items": {"type": "object", "required": ["table", "column"],
+          "properties": {"table": {"type": "string"}, "column": {"type": "string"}}}}
+      }
+    },
+    "finding": {
+      "type": "object",
+      "required": ["severity", "code", "key", "message"],
+      "properties": {
+        "severity": {"$ref": "#/$defs/severity"},
+        "code": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "description": "never renamed; schema/codes.txt lists them"},
+        "key": {"type": "string", "description": "stable across runs: the code and the object (a baseline's key)"},
+        "object": {"type": "string", "description": "for people; subject is the machine-readable form"},
+        "subject": {"$ref": "#/$defs/subject"},
+        "message": {"type": "string", "description": "for people: its wording changes freely"},
+        "examples": {"$ref": "#/$defs/strings"},
+        "patterns": {"type": "array", "items": {"$ref": "#/$defs/pattern"}},
+        "transactions": {"type": "array", "items": {"$ref": "#/$defs/transaction"}},
+        "measure": {
+          "type": "object",
+          "required": ["rows", "of", "method"],
+          "properties": {"rows": {"type": "integer"}, "of": {"type": "integer", "minimum": -1}, "method": {"type": "string"}}
+        },
+        "suggestion": {"$ref": "#/$defs/suggestion"}
+      }
+    },
+    "subject": {
+      "type": "object",
+      "required": ["kind"],
+      "description": "what the finding is about. kind is an open list: table, column, constraint, index, database, role, extension, setting, schema, file, tables, reason, pattern, transaction",
+      "properties": {
+        "kind": {"type": "string"},
+        "side": {"enum": ["cloud", "customer"]},
+        "schema": {"type": "string"}, "table": {"type": "string"}, "column": {"type": "string"},
+        "constraint": {"type": "string"}, "columns": {"$ref": "#/$defs/strings"},
+        "ref_schema": {"type": "string"}, "ref_table": {"type": "string"}, "ref_columns": {"$ref": "#/$defs/strings"},
+        "partition_of": {"type": "string"}, "partitions": {"$ref": "#/$defs/strings"},
+        "database": {"type": "string"}, "role": {"type": "string"}, "extension": {"type": "string"}, "setting": {"type": "string"},
+        "path": {"type": "string"}, "reason": {"type": "string"}, "fingerprint": {"type": "string"},
+        "cloud_tables": {"$ref": "#/$defs/strings"}, "lokadb_tables": {"$ref": "#/$defs/strings"}
+      }
+    },
+    "pattern": {
+      "type": "object",
+      "required": ["fingerprint", "sql", "calls", "write"],
+      "properties": {
+        "fingerprint": {"type": "string", "description": "pg_query fingerprint, as the proxy's allow list matches it; empty when it does not parse"},
+        "sql": {"type": "string", "description": "normalized: constants are $n"},
+        "calls": {"type": "integer", "minimum": 0},
+        "write": {"type": "boolean"},
+        "tables": {"$ref": "#/$defs/strings"},
+        "roles": {"$ref": "#/$defs/strings"},
+        "sources": {"$ref": "#/$defs/strings"},
+        "note": {"type": "string"},
+        "gaps": {"type": "array", "items": {"type": "object", "required": ["kind", "table"],
+          "properties": {"kind": {"type": "string"}, "table": {"type": "string"}, "column": {"type": "string"}, "form": {"type": "string"}, "cloud": {"type": "boolean"}}}}
+      }
+    },
+    "transaction": {
+      "type": "object",
+      "required": ["cloud_tables", "lokadb_tables", "shapes", "count", "statements"],
+      "properties": {
+        "cloud_tables": {"$ref": "#/$defs/strings"},
+        "lokadb_tables": {"$ref": "#/$defs/strings"},
+        "shapes": {"type": "integer", "minimum": 0},
+        "count": {"type": "integer", "minimum": 0},
+        "statements": {"type": "array", "items": {"type": "object", "required": ["fingerprint", "sql", "write"],
+          "properties": {"fingerprint": {"type": "string"}, "sql": {"type": "string"}, "write": {"type": "boolean"}, "tables": {"$ref": "#/$defs/strings"}}}}
+      }
+    },
+    "suggestion": {
+      "type": "object",
+      "required": ["kind", "routing", "patterns", "calls"],
+      "properties": {
+        "kind": {"type": "string", "description": "relation, cloud_table, key (an open list)"},
+        "routing": {"$ref": "#/$defs/routing"},
+        "data_check": {"type": "object"},
+        "key_check": {"type": "object", "properties": {"rows": {"type": "integer"}, "nulls": {"type": "integer"}, "duplicate_values": {"type": "integer"}}},
+        "patterns": {"$ref": "#/$defs/strings"},
+        "calls": {"type": "integer", "minimum": 0}
+      }
+    },
+    "ci": {
+      "type": "object",
+      "required": ["baseline", "new", "stale", "accepted", "accepted_without_reason"],
+      "properties": {
+        "baseline": {"type": "string", "description": "the baseline file, empty without -baseline"},
+        "new": {"type": "array", "items": {"type": "object", "required": ["key", "severity", "code", "hint"],
+          "properties": {"key": {"type": "string"}, "severity": {"$ref": "#/$defs/severity"}, "code": {"type": "string"}, "object": {"type": "string"},
+            "pattern": {"$ref": "#/$defs/pattern"}, "hint": {"type": "string"}}}},
+        "stale": {"type": "array", "items": {"type": "object", "required": ["key", "code"]}},
+        "accepted": {"type": "integer", "minimum": 0},
+        "accepted_without_reason": {"type": "integer", "minimum": 0}
+      }
+    },
+    "profile": {
+      "type": "object",
+      "required": ["profile"],
+      "properties": {
+        "profile": {"type": "string"}, "org": {"type": "integer"}, "current_profile": {"type": "string"},
+        "query_patterns": {"type": "integer"}, "query_patterns_direct": {"type": "integer"},
+        "calls": {"type": "integer"}, "calls_direct": {"type": "integer"}
+      }
+    },
+    "latency": {
+      "type": "object",
+      "required": ["rtt_ms", "model", "exchanges", "transactions", "total_fdw_ms", "total_direct_ms", "total_target_ms"],
+      "properties": {
+        "rtt_ms": {"type": "number", "exclusiveMinimum": 0},
+        "model": {"const": "estimate"},
+        "exchanges": {"type": "object", "additionalProperties": {"type": "integer"}},
+        "transactions": {"type": "array", "items": {"type": "object",
+          "required": ["count", "statements", "exchanges_fdw", "exchanges_direct", "ms_fdw", "ms_direct", "exchanges_target", "ms_target", "single_statement"],
+          "properties": {
+            "count": {"type": "integer"},
+            "statements": {"type": "array", "items": {"type": "object", "required": ["fingerprint", "sql", "kind", "repeats"],
+              "properties": {"fingerprint": {"type": "string"}, "sql": {"type": "string"}, "kind": {"type": "string"}, "repeats": {"type": "number"},
+                "repeats_counted": {"type": "boolean"}, "exchanges_fdw": {"type": "number"}, "exchanges_direct": {"type": "number"},
+                "exchanges_target": {"type": "number"}, "all_organizations": {"type": "boolean"}}}},
+            "exchanges_fdw": {"type": "number"}, "exchanges_direct": {"type": "number"}, "exchanges_target": {"type": "number"},
+            "ms_fdw": {"type": "number"}, "ms_direct": {"type": "number"}, "ms_target": {"type": "number"},
+            "single_statement": {"type": "boolean"}, "all_organizations": {"type": "boolean"}}}},
+        "total_fdw_ms": {"type": "number"},
+        "total_direct_ms": {"type": "number"},
+        "total_target_ms": {"type": "number"}
+      }
+    }
+  }
+}

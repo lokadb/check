@@ -1,0 +1,5 @@
+lokadb check: GitHub Action, report format and documentation
+Copyright 2026 Evgeny Shevtsov
+
+This product includes work by Evgeny Shevtsov and the LokaDB contributors.
+lokadb itself, which the action runs, is https://github.com/lokadb/lokadb (Apache-2.0).
