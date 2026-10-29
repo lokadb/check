@@ -12,7 +12,7 @@ CREATE FUNCTION touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW;
 CREATE TRIGGER documents_touch BEFORE UPDATE ON documents FOR EACH ROW EXECUTE FUNCTION touch();
 GRANT SELECT ON documents TO app;
 CREATE TABLE document_versions (id bigserial PRIMARY KEY, document_id bigint, content text);
-CREATE TABLE attachments (id char(26) PRIMARY KEY, organization_id bigint NOT NULL,
+CREATE TABLE attachments (id numeric(26,0) PRIMARY KEY, organization_id bigint NOT NULL,
   document_org bigint NOT NULL, document_id bigint NOT NULL, FOREIGN KEY (document_org, document_id) REFERENCES documents (organization_id, id));
 INSERT INTO organizations (name) VALUES ('A'), ('B');
 INSERT INTO documents (organization_id, slug) VALUES (1, 'a'), (2, 'b');

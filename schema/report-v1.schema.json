@@ -85,7 +85,9 @@
             "basis": {"enum": ["fk", "name"], "description": "name: a column named by the convention, verified on the data"},
             "code": {"type": "string", "description": "why the table stays in the cloud or is ambiguous"},
             "reason": {"type": "string"},
-            "options": {"type": "array", "items": {"type": "object", "properties": {"column": {"type": "string"}, "target": {"type": "string"}}}}
+            "options": {"type": "array", "items": {"type": "object", "properties": {"column": {"type": "string"}, "target": {"type": "string"}}}},
+            "nullable_path": {"type": "boolean", "description": "the only path to the parent is a column that may be NULL"},
+            "rows_without_parent": {"type": "integer", "description": "rows that hold NULL there now and would not move"}
           }
         }}
       }

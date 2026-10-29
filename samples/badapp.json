@@ -89,7 +89,7 @@
         "table": "attachments",
         "column": "id"
       },
-      "message": "attachments.id is character(26): lokadb takes keys of type smallint, integer, bigint, uuid, text or varchar (under a deterministic collation) so far"
+      "message": "attachments.id is numeric(26,0): lokadb takes keys of type smallint, integer, bigint, uuid, text, varchar or character(n) (under a deterministic collation) so far"
     },
     {
       "severity": "change",
